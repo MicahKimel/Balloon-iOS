@@ -7,6 +7,7 @@
 
 
 import SpriteKit
+import UIKit
 
 
 class GameScene: SKScene, SKPhysicsContactDelegate {
@@ -14,6 +15,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     var score = 0
     var scoreLabel: SKLabelNode!
     var onGameOver: ((Int) -> Void)?
+    
+    // Appearance configuration (set from SwiftUI)
+    private var balloonFillColor: UIColor = .systemRed
+    private var arrowShaftColor: UIColor = UIColor(red: 0.82, green: 0.65, blue: 0.40, alpha: 1)
+    private var arrowHeadColor: UIColor = UIColor(red: 0.75, green: 0.75, blue: 0.80, alpha: 1)
+    private var arrowFeatherColor: UIColor = UIColor(red: 0.85, green: 0.20, blue: 0.20, alpha: 1)
+    private var sceneBackgroundColor: UIColor = .black
+    private var enableBalloonTrail: Bool = false
+    
+    // Trail state
+    private var lastTrailSpawnTime: TimeInterval = 0
 
     // Rope simulation
     private var ropeSegments: [SKShapeNode] = []
@@ -40,6 +52,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     override func didMove(to view: SKView) {
         physicsWorld.contactDelegate = self
         physicsWorld.gravity = .zero
+        
+        backgroundColor = sceneBackgroundColor
 
         let borderBody = SKPhysicsBody(edgeLoopFrom: self.frame)
         borderBody.categoryBitMask = PhysicsCategory.edge
@@ -74,7 +88,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     func setupBalloon() {
         balloon = SKShapeNode(circleOfRadius: balloonRadius)
-        balloon.fillColor = .systemRed
+        balloon.fillColor = balloonFillColor
         balloon.strokeColor = .white
         balloon.lineWidth = 2
         balloon.position = CGPoint(x: frame.midX, y: frame.midY)
@@ -179,6 +193,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
     override func didSimulatePhysics() {
         updateRopeDrawing()
+    }
+    
+    override func update(_ currentTime: TimeInterval) {
+        guard enableBalloonTrail, balloon != nil else { return }
+        
+        // Spawn a small "ghost" circle periodically to form a trailing effect
+        let interval: TimeInterval = 0.06
+        if currentTime - lastTrailSpawnTime >= interval {
+            lastTrailSpawnTime = currentTime
+            spawnTrailDot()
+        }
     }
 
     // MARK: - Collision
@@ -478,17 +503,17 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         let totalLen = shaftLen + headLen
         let originX  = -totalLen / 2   // left edge of shaft
 
-        // 1. Shaft (wooden look — warm tan colour)
+        // 1. Shaft (customisable colour)
         let shaftPath = CGMutablePath()
         shaftPath.addRect(CGRect(x: originX, y: -shaftW / 2,
                                  width: shaftLen, height: shaftW))
         let shaft = SKShapeNode(path: shaftPath)
-        shaft.fillColor = UIColor(red: 0.82, green: 0.65, blue: 0.40, alpha: 1) // tan
-        shaft.strokeColor = UIColor(red: 0.55, green: 0.40, blue: 0.20, alpha: 1)
+        shaft.fillColor = arrowShaftColor
+        shaft.strokeColor = arrowShaftColor.withAlphaComponent(0.8)
         shaft.lineWidth = 0.5
         container.addChild(shaft)
 
-        // 2. Arrowhead (dark steel triangle)
+        // 2. Arrowhead (customisable colour)
         let tipX  = originX + totalLen
         let baseX = originX + shaftLen
         let headPath = CGMutablePath()
@@ -497,8 +522,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         headPath.addLine(to: CGPoint(x: baseX, y: -headW))
         headPath.closeSubpath()
         let head = SKShapeNode(path: headPath)
-        head.fillColor = UIColor(red: 0.75, green: 0.75, blue: 0.80, alpha: 1) // steel
-        head.strokeColor = UIColor(red: 0.30, green: 0.30, blue: 0.35, alpha: 1)
+        head.fillColor = arrowHeadColor
+        head.strokeColor = arrowHeadColor.withAlphaComponent(0.8)
         head.lineWidth = 0.5
         container.addChild(head)
 
@@ -510,7 +535,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             fPath.addLine(to: CGPoint(x: tailX + fletchLen,
                                       y: sign * fletchW))
             let feather = SKShapeNode(path: fPath)
-            feather.strokeColor = UIColor(red: 0.85, green: 0.20, blue: 0.20, alpha: 1) // red feather
+            feather.strokeColor = arrowFeatherColor
             feather.lineWidth = 2
             feather.lineCap = .round
             container.addChild(feather)
@@ -561,5 +586,44 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
             }
         }
         arrowNode.run(SKAction.sequence([wait, scoreCheck]))
+    }
+    
+    // MARK: - Appearance API
+    
+    func applyAppearance(
+        balloonColor: UIColor,
+        arrowShaftColor: UIColor,
+        arrowHeadColor: UIColor,
+        arrowFeatherColor: UIColor,
+        backgroundColor: UIColor,
+        enableTrail: Bool
+    ) {
+        self.balloonFillColor = balloonColor
+        self.arrowShaftColor = arrowShaftColor
+        self.arrowHeadColor = arrowHeadColor
+        self.arrowFeatherColor = arrowFeatherColor
+        self.sceneBackgroundColor = backgroundColor
+        self.enableBalloonTrail = enableTrail
+        
+        // If the scene is already presented, update immediately
+        self.backgroundColor = backgroundColor
+        balloon?.fillColor = balloonColor
+    }
+    
+    // MARK: - Trail
+    
+    private func spawnTrailDot() {
+        guard let balloon = balloon else { return }
+        
+        let dot = SKShapeNode(circleOfRadius: 4)
+        dot.fillColor = balloonFillColor.withAlphaComponent(0.4)
+        dot.strokeColor = .clear
+        dot.position = balloon.position
+        dot.zPosition = -2
+        addChild(dot)
+        
+        let fade = SKAction.fadeOut(withDuration: 0.5)
+        let remove = SKAction.removeFromParent()
+        dot.run(SKAction.sequence([fade, remove]))
     }
 }
