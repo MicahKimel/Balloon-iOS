@@ -16,6 +16,11 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     var scoreLabel: SKLabelNode!
     var onGameOver: ((Int) -> Void)?
     
+    // Story
+    private var storyLabel: SKLabelNode!
+    private var highestStoryMilestone: Int = 0
+    private var familyScenePlayed: Bool = false
+    
     // Appearance configuration (set from SwiftUI)
     private var balloonFillColor: UIColor = .systemRed
     private var arrowShaftColor: UIColor = UIColor(red: 0.82, green: 0.65, blue: 0.40, alpha: 1)
@@ -23,6 +28,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     private var arrowFeatherColor: UIColor = UIColor(red: 0.85, green: 0.20, blue: 0.20, alpha: 1)
     private var sceneBackgroundColor: UIColor = .black
     private var enableBalloonTrail: Bool = false
+    private var isFamilyMode: Bool = false
+    private var familyBalloons: [SKShapeNode] = []
     
     // Trail state
     private var lastTrailSpawnTime: TimeInterval = 0
@@ -60,10 +67,19 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         self.physicsBody = borderBody
 
         setupBalloon()
-        setupRope()
+        if !isFamilyMode {
+            // In individual mode we use the full physics rope.
+            setupRope()
+        }
         setupScoreLabel()
+        setupStoryLabel()
         startArrowSpawning()
         startPowerUpSpawning()
+        
+        // If we started this run explicitly in family mode, spawn the family immediately (no overlay)
+        if isFamilyMode {
+            playFamilyFoundScene()
+        }
     }
 
     // MARK: - Score
@@ -82,6 +98,202 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     func updateScore() {
         score += 1
         scoreLabel.text = "Score: \(score)"
+        updateStoryIfNeeded()
+        
+        let defaults = UserDefaults.standard
+        if score >= 10 {
+            defaults.set(true, forKey: "achievement_score10")
+        }
+        if score >= 50 {
+            defaults.set(true, forKey: "achievement_score50")
+        }
+        if score >= 100 {
+            defaults.set(true, forKey: "achievement_score100")
+        }
+    }
+    
+    // MARK: - Story
+    
+    private func setupStoryLabel() {
+        storyLabel = SKLabelNode(fontNamed: "AvenirNext-Regular")
+        storyLabel.text = "The arrows rise, jealous of your color… Quick tap the balloon and Fly, Fly, be free!"
+        storyLabel.fontSize = 16
+        storyLabel.fontColor = UIColor(white: 0.9, alpha: 0.5)
+        storyLabel.horizontalAlignmentMode = .center
+        storyLabel.verticalAlignmentMode = .top
+        storyLabel.preferredMaxLayoutWidth = size.width - 40
+        storyLabel.numberOfLines = 0
+        storyLabel.position = CGPoint(x: frame.midX, y: frame.minY + 80)
+        storyLabel.zPosition = 10
+        addChild(storyLabel)
+    }
+    
+    private func updateStoryIfNeeded() {
+        // Milestones where the story changes (mapped to rising tension, ending at family discovery)
+        let milestones: [Int] = [1, 10, 20, 30, 40, 50, 100]
+        guard let next = milestones.last(where: { score >= $0 && $0 > highestStoryMilestone }) else {
+            return
+        }
+        
+        highestStoryMilestone = next
+        let text = storyText(for: next)
+        storyLabel.text = text
+        appendStoryLog(text: text)
+        
+        if next == 100 {
+            // Only the first time we ever cross this threshold should unlock family + dramatic scene
+            let defaults = UserDefaults.standard
+            let alreadyUnlocked = defaults.bool(forKey: "familyModeUnlocked")
+            if !alreadyUnlocked {
+                unlockFamilyAndMode()
+                // Current run transitions into family mode from here on
+                isFamilyMode = true
+                clearMainRope()
+                playFamilyFoundScene()
+            }
+        }
+    }
+    
+    private func storyText(for milestone: Int) -> String {
+        switch milestone {
+        case 1:
+            return "You slip past the first jealous arrow. The sky remembers your color."
+        case 10:
+            return "Ten arrows missed. Whispers rise: maybe the last balloon can’t be popped."
+        case 20:
+            return "The arrows weave tighter patterns, stung by every second you survive."
+        case 30:
+            return "You dance between volleys. Their jealousy turns to obsession."
+        case 40:
+            return "The air hums with tension. Somewhere below, quivers run empty."
+        case 50:
+            return "You’ve outlived every party you were meant to decorate."
+        case 100:
+            return "A rumor floats on the wind: perhaps you were never truly alone…"
+        default:
+            return storyLabel?.text ?? ""
+        }
+    }
+    
+    private func unlockFamilyAndMode() {
+        // Story-wise, this is where the last balloon finds the rest.
+        let defaults = UserDefaults.standard
+        
+        // Unlock every balloon skin (ids 0...4 as defined in AppearanceConfig)
+        let allBalloonIDs = Array(0...4)
+        let encoded = allBalloonIDs.map(String.init).joined(separator: ",")
+        defaults.set(encoded, forKey: "unlockedBalloonStyleIDs")
+        
+        // Unlock family play mode in SwiftUI
+        defaults.set(true, forKey: "familyModeUnlocked")
+        defaults.set(true, forKey: "achievement_familyUnlocked")
+    }
+
+    private func appendStoryLog(text: String) {
+        let defaults = UserDefaults.standard
+        
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd HH:mm"
+        let stamp = formatter.string(from: Date())
+        let line = "\(stamp) – \(text)"
+        
+        let existing = defaults.string(forKey: "storyLog") ?? ""
+        let updated: String
+        if existing.isEmpty {
+            updated = line
+        } else {
+            updated = existing + "\n" + line
+        }
+        defaults.set(updated, forKey: "storyLog")
+    }
+
+    private func playFamilyFoundScene() {
+        guard !familyScenePlayed else { return }
+        familyScenePlayed = true
+        
+        // Dim the world
+        let overlay = SKSpriteNode(color: UIColor.black.withAlphaComponent(0.75), size: size)
+        overlay.position = CGPoint(x: frame.midX, y: frame.midY)
+        overlay.zPosition = 50
+        addChild(overlay)
+        
+        // Title text
+        let title = SKLabelNode(fontNamed: "AvenirNext-Heavy")
+        title.text = "YOU WERE NEVER ALONE"
+        title.fontSize = 26
+        title.fontColor = .white
+        title.position = CGPoint(x: frame.midX, y: frame.midY + 40)
+        title.zPosition = 51
+        addChild(title)
+        
+        // Subtitle
+        let subtitle = SKLabelNode(fontNamed: "AvenirNext-Regular")
+        subtitle.text = "Your family of balloons rises to meet you in the clear sky."
+        subtitle.fontSize = 16
+        subtitle.fontColor = UIColor(white: 0.9, alpha: 0.9)
+        subtitle.preferredMaxLayoutWidth = size.width - 60
+        subtitle.numberOfLines = 0
+        subtitle.horizontalAlignmentMode = .center
+        subtitle.verticalAlignmentMode = .center
+        subtitle.position = CGPoint(x: frame.midX, y: frame.midY - 10)
+        subtitle.zPosition = 51
+        addChild(subtitle)
+        
+        // Spawn a ring of colorful family balloons around the main one
+        let colors: [UIColor] = [
+            .systemRed, .systemBlue, .systemGreen, .systemOrange,
+            .systemPurple, .systemPink, .systemTeal, .systemYellow
+        ]
+        let radius = balloonRadius * 0.9
+        let ringRadius: CGFloat = 120
+        let center = CGPoint(x: frame.midX, y: frame.midY)
+        
+        for (index, color) in colors.enumerated() {
+            let angle = (CGFloat(index) / CGFloat(colors.count)) * (.pi * 2)
+            let x = center.x + cos(angle) * ringRadius
+            let y = center.y + sin(angle) * ringRadius
+            
+            let node = SKShapeNode(circleOfRadius: radius)
+            node.fillColor = color
+            node.strokeColor = .white
+            node.lineWidth = 2
+            node.position = CGPoint(x: x, y: y)
+            node.alpha = 0.0
+            node.setScale(0.5)
+            
+            let body = SKPhysicsBody(circleOfRadius: radius)
+            body.isDynamic = true
+            body.affectedByGravity = false
+            body.categoryBitMask    = PhysicsCategory.balloon
+            body.contactTestBitMask = PhysicsCategory.arrow
+            body.collisionBitMask   = PhysicsCategory.edge
+            node.physicsBody = body
+            
+            addChild(node)
+            familyBalloons.append(node)
+            addString(to: node)
+            
+            let delay = SKAction.wait(forDuration: 0.05 * Double(index))
+            let appear = SKAction.group([
+                SKAction.fadeIn(withDuration: 0.2),
+                SKAction.scale(to: 1.0, duration: 0.2)
+            ])
+            node.run(SKAction.sequence([delay, appear]))
+        }
+        
+        // Pulse the main balloon
+        let pulse = SKAction.sequence([
+            SKAction.scale(to: 1.2, duration: 0.15),
+            SKAction.scale(to: 1.0, duration: 0.15)
+        ])
+        balloon.run(pulse)
+        
+        // Fade out overlay and text after a moment
+        let wait = SKAction.wait(forDuration: 2.0)
+        let fadeOut = SKAction.fadeOut(withDuration: 0.5)
+        overlay.run(SKAction.sequence([wait, fadeOut, .removeFromParent()]))
+        title.run(SKAction.sequence([wait, fadeOut, .removeFromParent()]))
+        subtitle.run(SKAction.sequence([wait, fadeOut, .removeFromParent()]))
     }
 
     // MARK: - Balloon
@@ -101,6 +313,14 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         pBody.collisionBitMask   = PhysicsCategory.edge
         balloon.physicsBody = pBody
         addChild(balloon)
+        
+        familyBalloons = [balloon]
+        
+        // Only show per-balloon strings in family mode. In individual mode we rely
+        // on the main physics rope for the tether visual.
+        if isFamilyMode {
+            addString(to: balloon)
+        }
     }
 
     // MARK: - Rope
@@ -159,6 +379,53 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
 
             prevNode = seg
         }
+    }
+
+    private func clearMainRope() {
+        // Remove physics rope segments and clear the draw node.
+        for seg in ropeSegments {
+            seg.removeFromParent()
+        }
+        ropeSegments.removeAll()
+        ropeDrawNode.path = nil
+    }
+
+    // Rope-style visual string attached to a balloon (reuses the rope path idea)
+    private func addString(to node: SKShapeNode) {
+        let path = CGMutablePath()
+
+        // Start just below the balloon
+        let start = CGPoint(x: 0, y: -balloonRadius)
+        path.move(to: start)
+
+        // Build a few control points to create a gentle rope-like curve downward
+        let totalLength = balloonRadius * 2.4
+        let segments = 4
+        var points: [CGPoint] = [start]
+        for i in 1...segments {
+            let t = CGFloat(i) / CGFloat(segments)
+            let y = -balloonRadius - totalLength * t
+            // small horizontal sway left/right as we go down
+            let x: CGFloat = (i % 2 == 0) ? -3 : 3
+            points.append(CGPoint(x: x, y: y))
+        }
+
+        for i in 1..<points.count {
+            let prev = points[i - 1]
+            let curr = points[i]
+            let mid = CGPoint(x: (prev.x + curr.x) / 2,
+                              y: (prev.y + curr.y) / 2)
+            path.addQuadCurve(to: mid, control: prev)
+        }
+        if let last = points.last {
+            path.addLine(to: last)
+        }
+
+        let string = SKShapeNode(path: path)
+        string.strokeColor = .white
+        string.lineWidth = 1.5
+        string.zPosition = -1
+        node.addChild(string)
     }
 
     /// Redraws the rope as a smooth curve through all segment positions each frame.
@@ -231,10 +498,35 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
                 arrowNode?.removeFromParent()
                 updateScore() // Reward for "blocking"
             } else {
-                // Game Over
-                self.isPaused = true
-                self.removeAllActions()
-                self.onGameOver?(self.score)
+                // Determine which balloon was hit
+                let hitBalloonNode = (contact.bodyA.categoryBitMask == PhysicsCategory.balloon
+                                      ? contact.bodyA.node
+                                      : contact.bodyB.node) as? SKShapeNode
+                
+                if isFamilyMode, let hit = hitBalloonNode {
+                    if let idx = familyBalloons.firstIndex(of: hit) {
+                        familyBalloons.remove(at: idx)
+                    }
+                    
+                    let pop = SKAction.sequence([
+                        SKAction.scale(to: 1.3, duration: 0.08),
+                        SKAction.fadeOut(withDuration: 0.15),
+                        .removeFromParent()
+                    ])
+                    hit.run(pop)
+                    
+                    // Lose only when all balloons are gone
+                    if familyBalloons.allSatisfy({ $0.parent == nil }) {
+                        self.isPaused = true
+                        self.removeAllActions()
+                        self.onGameOver?(self.score)
+                    }
+                } else {
+                    // Individual mode: one hit = game over
+                    self.isPaused = true
+                    self.removeAllActions()
+                    self.onGameOver?(self.score)
+                }
             }
         }
     }
@@ -310,18 +602,20 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         if isShielded { return }
         isShielded = true
         
-        // 1. Main Outer Ring
-        let shieldContainer = SKShapeNode(circleOfRadius: balloonRadius + 12)
-        shieldContainer.strokeColor = .systemCyan
-        shieldContainer.lineWidth = 2
-        shieldContainer.alpha = 0.7
+        // Achievement: first shield collected
+        UserDefaults.standard.set(true, forKey: "achievement_firstShield")
+        
+        // 1. Template for the shield ring
+        let shieldTemplate = SKShapeNode(circleOfRadius: balloonRadius + 12)
+        shieldTemplate.strokeColor = .systemCyan
+        shieldTemplate.lineWidth = 2
+        shieldTemplate.alpha = 0.7
         
         // 2. The Tech Ring (Dashed look using segments)
-        // We create a circle with "holes" in it manually
         let techPath = CGMutablePath()
         for angle in stride(from: 0, to: CGFloat.pi * 2, by: CGFloat.pi / 4) {
             techPath.addRelativeArc(center: .zero, radius: balloonRadius + 8,
-                                   startAngle: angle, delta: CGFloat.pi / 8)
+                                    startAngle: angle, delta: CGFloat.pi / 8)
         }
         
         let innerRing = SKShapeNode(path: techPath)
@@ -329,21 +623,29 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         innerRing.lineWidth = 1
         innerRing.lineCap = .round
         innerRing.glowWidth = 4.0
-        shieldContainer.addChild(innerRing)
+        shieldTemplate.addChild(innerRing)
         
         // Spinning animation for the dashed part
         let rotate = SKAction.rotate(byAngle: .pi * 2, duration: 4.0)
         innerRing.run(SKAction.repeatForever(rotate))
         
-        shieldNode = shieldContainer
-        balloon.addChild(shieldContainer)
-        
-        // Breathing effect
-        let breathe = SKAction.sequence([
-            SKAction.fadeAlpha(to: 0.3, duration: 1.0),
-            SKAction.fadeAlpha(to: 0.7, duration: 1.0)
-        ])
-        shieldContainer.run(SKAction.repeatForever(breathe))
+        // Apply shield to either the single balloon or the whole family
+        let targets: [SKShapeNode] = isFamilyMode ? familyBalloons : (balloon != nil ? [balloon] : [])
+        for node in targets {
+            let shield = shieldTemplate.copy() as! SKShapeNode
+            shield.name = "shield"
+            node.addChild(shield)
+            
+            if node === balloon {
+                shieldNode = shield
+            }
+            
+            let breathe = SKAction.sequence([
+                SKAction.fadeAlpha(to: 0.3, duration: 1.0),
+                SKAction.fadeAlpha(to: 0.7, duration: 1.0)
+            ])
+            shield.run(SKAction.repeatForever(breathe))
+        }
     }
     
     // Mark: - Active SlowMo
@@ -353,7 +655,23 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = touches.first else { return }
         let location = touch.location(in: self)
-
+        
+        // In family mode, allow tapping any remaining balloon
+        if isFamilyMode {
+            for node in familyBalloons where node.parent != nil {
+                if node.contains(location) {
+                    let dx = node.position.x - location.x
+                    let dy = node.position.y - location.y
+                    let angle = atan2(dy, dx)
+                    let speed: CGFloat = 450
+                    node.physicsBody?.velocity =
+                        CGVector(dx: cos(angle) * speed, dy: sin(angle) * speed)
+                    return
+                }
+            }
+        }
+        
+        // Fallback: single main balloon
         if balloon.contains(location) {
             let dx = balloon.position.x - location.x
             let dy = balloon.position.y - location.y
@@ -451,7 +769,16 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         indicator.run(SKAction.sequence([repeatBlink, spawnAction]))
     }
 
+    private func currentTargetBalloon() -> SKShapeNode? {
+        if isFamilyMode {
+            return familyBalloons.first(where: { $0.parent != nil })
+        }
+        return balloon
+    }
+
     private func fireArrow(from start: CGPoint) {
+        guard let target = currentTargetBalloon() else { return }
+
         let arrowNode = makeArrowNode()
         arrowNode.position = start
 
@@ -463,9 +790,9 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         pBody.collisionBitMask   = 0
         arrowNode.physicsBody = pBody
         addChild(arrowNode)
-
-        let dx = balloon.position.x - start.x
-        let dy = balloon.position.y - start.y
+        
+        let dx = target.position.x - start.x
+        let dy = target.position.y - start.y
         let angle = atan2(dy, dx)
         arrowNode.zRotation = angle
 
@@ -596,7 +923,8 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         arrowHeadColor: UIColor,
         arrowFeatherColor: UIColor,
         backgroundColor: UIColor,
-        enableTrail: Bool
+        enableTrail: Bool,
+        familyMode: Bool
     ) {
         self.balloonFillColor = balloonColor
         self.arrowShaftColor = arrowShaftColor
@@ -604,6 +932,7 @@ class GameScene: SKScene, SKPhysicsContactDelegate {
         self.arrowFeatherColor = arrowFeatherColor
         self.sceneBackgroundColor = backgroundColor
         self.enableBalloonTrail = enableTrail
+        self.isFamilyMode = familyMode
         
         // If the scene is already presented, update immediately
         self.backgroundColor = backgroundColor
